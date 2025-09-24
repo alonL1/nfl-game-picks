@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NFL Game Picks</title>
+    <link rel="stylesheet" href="src/css/style.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <h1>NFL Game Picks</h1>
+      <p class="subtitle">Pick winners with friends and track in realtime</p>
+    </header>
+
+    <section class="controls" aria-label="Controls">
+      <div class="control-group">
+        <label for="displayName">Your name</label>
+        <input id="displayName" type="text" placeholder="e.g., Alex" autocomplete="name" />
+      </div>
+      <div class="control-group">
+        <label for="leagueId">League code</label>
+        <input id="leagueId" type="text" value="demo-league" />
+      </div>
+      <div class="buttons">
+        <button id="refreshBtn" type="button">Refresh schedule</button>
+        <button id="clearLocalBtn" type="button" class="secondary">Clear local selections</button>
+      </div>
+    </section>
+
+    <main>
+      <div id="status" role="status" aria-live="polite"></div>
+      <section id="games" class="games" aria-label="Upcoming games"></section>
+    </main>
+
+    <!-- Load Firebase config first (placeholder file) -->
+    <script type="module" src="src/js/firebase-config.js"></script>
+    <!-- Initialize Firebase (exports db) -->
+    <script type="module" src="src/js/firebase-init.js"></script>
+    <!-- App logic -->
+    <script type="module" src="src/js/app.js"></script>
+  </body>
+  </html>
+
+
