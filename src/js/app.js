@@ -1,13 +1,18 @@
-import { db, serverTimestamp, addDoc, collection, query, where, getDocs, firebaseReady } from './firebase-init.js';
+import { db, serverTimestamp, collection, query, where, getDocs, firebaseReady, doc, setDoc } from './firebase-init.js';
 
 const STORAGE_KEY = 'nfl_picks_local_v1';
 const SCHEDULE_URL = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard';
+
+// Helpers for user normalization and deterministic document IDs
+const normalizeName = (s) => (s || '').trim().toLowerCase();
+const pickDocId = (league, nameKey, gameId) => `${league}__${nameKey}__${gameId}`;
 
 const el = {
   status: document.getElementById('status'),
   games: document.getElementById('games'),
   displayName: document.getElementById('displayName'),
   leagueId: document.getElementById('leagueId'),
+  weekSelect: document.getElementById('weekSelect'),
   refreshBtn: document.getElementById('refreshBtn'),
   clearLocalBtn: document.getElementById('clearLocalBtn'),
   submitAllBtn: document.getElementById('submitAllBtn')
@@ -22,9 +27,9 @@ function setStatus(text, type = 'info') {
 function loadLocal() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : { displayName: '', leagueId: 'demo-league', picks: {} };
+    return raw ? JSON.parse(raw) : { displayName: '', leagueId: 'pookie-league', week: '1', picks: {} };
   } catch {
-    return { displayName: '', leagueId: 'demo-league', picks: {} };
+    return { displayName: '', leagueId: 'pookie-league', week: '1', picks: {} };
   }
 }
 
@@ -35,6 +40,8 @@ function saveLocal(state) {
 function parseKickoff(event) {
   let kickoffTs = null;
   let kickoffText = 'TBD';
+  let statusText = '';
+  let completed = false;
 
   if (event.date) {
     const dt = new Date(event.date);
@@ -44,7 +51,14 @@ function parseKickoff(event) {
     }
   }
 
-  return { kickoffTs, kickoffText };
+  // Try to read completion status and short status text
+  const comp = (event.competitions && event.competitions[0]) || {};
+  const status = (comp.status) || (event.status) || {};
+  const type = status.type || {};
+  completed = Boolean(type.completed);
+  statusText = (type.shortDetail || type.detail || '').trim();
+
+  return { kickoffTs, kickoffText, statusText, completed };
 }
 
 function normalizeEvents(events) {
@@ -58,6 +72,7 @@ function normalizeEvents(events) {
     let awayLogo = '';
     let homeRecord = '';
     let awayRecord = '';
+    let winnerTeam = '';
 
     for (const c of competitors) {
       const teamName = (c.team && (c.team.displayName || c.team.name || c.team.abbreviation)) || '';
@@ -99,20 +114,26 @@ function normalizeEvents(events) {
         awayLogo = logoHref || awayLogo;
         awayRecord = recordSummary || awayRecord;
       }
+
+      // detect winner if available
+      if (c.winner === true) {
+        winnerTeam = teamName || winnerTeam;
+      }
     }
 
     if (!home && competitors[0] && competitors[0].team) home = competitors[0].team.displayName || competitors[0].team.name || '';
     if (!away && competitors[1] && competitors[1].team) away = competitors[1].team.displayName || competitors[1].team.name || '';
 
-    const { kickoffTs, kickoffText } = parseKickoff(ev);
+    const { kickoffTs, kickoffText, statusText, completed } = parseKickoff(ev);
     const gameId = ev.id || (comp && comp.id) || `${home}-${away}-${ev.date || ''}`;
 
-    return { gameId, home, away, homeLogo, awayLogo, homeRecord, awayRecord, kickoffTs, kickoffText };
+    return { gameId, home, away, homeLogo, awayLogo, homeRecord, awayRecord, kickoffTs, kickoffText, statusText, completed, winnerTeam };
   });
 }
 
-async function fetchSchedule() {
-  const res = await fetch(SCHEDULE_URL, { cache: 'no-store' });
+async function fetchSchedule(week) {
+  const url = `${SCHEDULE_URL}?week=${encodeURIComponent(week || '1')}`;
+  const res = await fetch(url, { cache: 'no-store' });
   if (!res.ok) throw new Error(`Schedule fetch failed: ${res.status}`);
   const data = await res.json();
   return normalizeEvents(data.events || []);
@@ -122,12 +143,15 @@ function renderGameCard(game, state) {
   const wrapper = document.createElement('article');
   wrapper.className = 'game-card';
   wrapper.dataset.gameId = game.gameId;
+  if (game.completed && game.winnerTeam) {
+    wrapper.dataset.winnerTeam = game.winnerTeam;
+  }
 
   const isLocked = game.kickoffTs && Date.now() >= game.kickoffTs;
   const pick = state.picks[game.gameId] || '';
 
   wrapper.innerHTML = `
-    <div class="kickoff">Kickoff: ${game.kickoffText} ${isLocked ? '<span class="lock">(locked)</span>' : ''}</div>
+    <div class="kickoff">${game.completed ? (game.statusText ? game.statusText : 'Final') : `Kickoff: ${game.kickoffText}`} ${isLocked && !game.completed ? '<span class="lock">(locked)</span>' : ''}</div>
 
     <div class="pick-options">
       <label class="pick-label" title="${game.away}">
@@ -169,6 +193,22 @@ function renderGameCard(game, state) {
   });
 
   // Load picks for this game
+  // Highlight winner if completed
+  if (game.completed && game.winnerTeam) {
+    // mark winner label
+    const winnerInput = wrapper.querySelector(`input[name="pick-${game.gameId}"][value="${game.winnerTeam}"]`);
+    if (winnerInput) {
+      const winnerLabel = winnerInput.closest('label');
+      if (winnerLabel) winnerLabel.classList.add('winner');
+      // Mark other as loser for clarity
+      const otherInput = wrapper.querySelector(`input[name="pick-${game.gameId}"]:not([value="${game.winnerTeam}"])`);
+      if (otherInput) {
+        const loserLabel = otherInput.closest('label');
+        if (loserLabel) loserLabel.classList.add('loser');
+      }
+    }
+  }
+
   loadPicksForGame(game.gameId, wrapper);
 
   return wrapper;
@@ -185,7 +225,7 @@ async function loadPicksForGame(gameId, wrapper) {
 
   try {
     const league = (el.leagueId && el.leagueId.value) || 'demo-league';
-    const q = query(collection(db, 'picks'), where('leagueId', '==', league), where('gameId', '==', gameId));
+    const q = query(collection(db, 'picks'), where('league', '==', league), where('gameId', '==', gameId));
     const snap = await getDocs(q);
 
     if (!listEl) return;
@@ -195,11 +235,15 @@ async function loadPicksForGame(gameId, wrapper) {
     }
 
     const items = [];
-    snap.forEach(doc => {
-      const d = doc.data();
-      items.push(`${d.displayName || 'Anonymous'}: ${d.pick}`);
+    const winnerTeam = wrapper?.dataset?.winnerTeam || '';
+    const gameCompleted = Boolean(winnerTeam);
+    snap.forEach(dref => {
+      const d = dref.data();
+      const text = `${d.name || 'Anonymous'}: ${d.teamId}`;
+      const cls = gameCompleted ? (d.teamId === winnerTeam ? 'winner' : 'loser') : '';
+      items.push(`<div class="${cls}">${text}</div>`);
     });
-    listEl.innerHTML = items.map(t => `<div>${t}</div>`).join('');
+    listEl.innerHTML = items.join('');
   } catch (err) {
     console.error('loadPicksForGame error:', err);
     if (listEl) listEl.textContent = 'Failed to load picks.';
@@ -216,7 +260,7 @@ async function submitAllPicks() {
   }
 
   const ready = await firebaseReady;
-  if (!ready || !db || !addDoc || !collection || !serverTimestamp) {
+  if (!ready || !db || !collection || !serverTimestamp || !doc || !setDoc) {
     alert('Firestore not configured. Paste your Firebase config into src/js/firebase-config.js.');
     return;
   }
@@ -227,13 +271,16 @@ async function submitAllPicks() {
     const gameId = card.dataset.gameId;
     const selected = card.querySelector(`input[name="pick-${gameId}"]:checked`);
     if (selected) {
-      picks.push({
-        leagueId,
+      const nameKey = normalizeName(displayName);
+      const data = {
+        league: leagueId,
+        name: displayName,
+        nameKey,
         gameId,
-        displayName,
-        pick: selected.value,
-        timestamp: serverTimestamp()
-      });
+        teamId: selected.value,
+        createdAt: serverTimestamp()
+      };
+      picks.push({ data, docId: pickDocId(leagueId, nameKey, gameId) });
     }
   });
 
@@ -246,8 +293,8 @@ async function submitAllPicks() {
     el.submitAllBtn.disabled = true;
     el.submitAllBtn.textContent = 'Submitting...';
 
-    // Submit all picks
-    const promises = picks.map(pick => addDoc(collection(db, 'picks'), pick));
+    // Submit all picks deterministically (overwrite per user/game)
+    const promises = picks.map(p => setDoc(doc(db, 'picks', p.docId), p.data));
     await Promise.all(promises);
 
     setStatus(`Successfully submitted ${picks.length} picks!`, 'success');
@@ -272,11 +319,12 @@ async function render() {
   const state = loadLocal();
   el.displayName.value = state.displayName || '';
   el.leagueId.value = state.leagueId || 'demo-league';
+  if (el.weekSelect) el.weekSelect.value = state.week || '1';
 
   setStatus('Loading schedule...');
 
   try {
-    const games = await fetchSchedule();
+    const games = await fetchSchedule(state.week || '1');
     el.games.innerHTML = '';
 
     games.forEach(g => {
@@ -306,16 +354,71 @@ async function render() {
     s.leagueId = el.leagueId.value || 'demo-league';
     saveLocal(s);
   });
+
+  if (el.weekSelect) {
+    el.weekSelect.addEventListener('change', () => {
+      const s = loadLocal();
+      s.week = el.weekSelect.value || '1';
+      saveLocal(s);
+    });
+  }
 }
 
 // Event listeners
-el.refreshBtn.addEventListener('click', () => {
-  render();
+// Restore previously saved picks for the current user after refresh render
+async function restoreUserSelections(league, displayName) {
+  const nameKey = normalizeName(displayName);
+  if (!nameKey) return;
+
+  try {
+    const q = query(
+      collection(db, 'picks'),
+      where('league', '==', league),
+      where('nameKey', '==', nameKey)
+    );
+    const snap = await getDocs(q);
+    if (snap.empty) return;
+
+    const saved = {};
+    snap.forEach(dref => {
+      const x = dref.data();
+      if (x && x.gameId && x.teamId) saved[x.gameId] = x.teamId;
+    });
+
+    Object.entries(saved).forEach(([gameId, teamId]) => {
+      let input =
+        document.querySelector(`input[type="radio"][name="pick-${gameId}"][value="${teamId}"]`) ||
+        document.querySelector(`.game-card[data-game-id="${gameId}"] input[type="radio"][value="${teamId}"]`);
+
+      if (input) {
+        input.checked = true;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+  } catch (e) {
+    console.error('restoreUserSelections failed:', e);
+  }
+}
+
+el.refreshBtn.addEventListener('click', async () => {
+  await render();
+  const league = (el.leagueId && el.leagueId.value) || 'demo-league';
+  const displayName = (el.displayName && el.displayName.value) || '';
+  await restoreUserSelections(league, displayName);
 });
 
 el.clearLocalBtn.addEventListener('click', () => {
-  localStorage.removeItem(STORAGE_KEY);
-  setStatus('Cleared local selections.');
+  // preserve name and leagueId, only clear picks
+  try {
+    const s = loadLocal();
+    s.picks = {};
+    saveLocal(s);
+    setStatus('Cleared local selections.');
+  } catch (e) {
+    // fallback: if something weird happens, don't erase user name
+    console.error('Failed to clear picks, leaving name/league intact:', e);
+    setStatus('Failed to clear picks (check console).', 'error');
+  }
   render();
 });
 

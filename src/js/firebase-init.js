@@ -12,6 +12,8 @@ let collection = null;
 let query = null;
 let where = null;
 let getDocs = null;
+let docRefFn = null;
+let setDocFn = null;
 
 // Promise that resolves when firebase is ready (true if initialized or false if disabled)
 export const firebaseReady = (async () => {
@@ -22,7 +24,7 @@ export const firebaseReady = (async () => {
 
   try {
     // Use the *lite* Firestore build — it does not include realtime Listen support
-    const [{ initializeApp }, { getFirestore }, { serverTimestamp: ts, addDoc: add, collection: coll, query: q, where: w, getDocs: gd } ] = await Promise.all([
+    const [{ initializeApp }, { getFirestore }, { serverTimestamp: ts, addDoc: add, collection: coll, query: q, where: w, getDocs: gd, doc: d, setDoc: sd } ] = await Promise.all([
       import('https://www.gstatic.com/firebasejs/10.12.3/firebase-app.js'),
       import('https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore-lite.js'),
       // Note: some helpers (serverTimestamp/addDoc/collection/query/getDocs) are exported from the lite bundle path too,
@@ -40,6 +42,8 @@ export const firebaseReady = (async () => {
     query = q || (() => { throw new Error('query not available'); });
     where = w || (() => { throw new Error('where not available'); });
     getDocs = gd || (() => { throw new Error('getDocs not available'); });
+    docRefFn = d || (() => { throw new Error('doc not available'); });
+    setDocFn = sd || (() => { throw new Error('setDoc not available'); });
 
     console.log('Firebase (CDN) initialized — Firestore Lite ready.');
     return true;
@@ -58,4 +62,4 @@ export const onSnapshot = (..._args) => {
 };
 
 // Exports
-export { db, serverTimestamp, addDoc, collection, query, where, getDocs };
+export { db, serverTimestamp, addDoc, collection, query, where, getDocs, docRefFn as doc, setDocFn as setDoc };
