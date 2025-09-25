@@ -1,0 +1,22 @@
+{
+  "dependencies": {
+    "firebase": "^12.3.0"
+  },
+  "name": "nfl-game-picks",
+  "version": "1.0.0",
+  "description": "Client-only web app to list upcoming NFL games, let friends pick winners, and show realtime picks via Firebase Firestore.",
+  "main": "index.js",
+  "devDependencies": {
+    "vite": "^7.1.7"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dev": "vite"
+}
