@@ -14,7 +14,6 @@ const el = {
   leagueId: document.getElementById('leagueId'),
   weekSelect: document.getElementById('weekSelect'),
   refreshBtn: document.getElementById('refreshBtn'),
-  clearLocalBtn: document.getElementById('clearLocalBtn'),
   submitAllBtn: document.getElementById('submitAllBtn')
 };
 
@@ -185,10 +184,41 @@ function renderGameCard(game, state) {
   // Radio change handlers
   const radios = wrapper.querySelectorAll(`input[name="pick-${game.gameId}"]`);
   radios.forEach(r => {
-    r.addEventListener('change', () => {
+    r.addEventListener('change', async () => {
       const selected = wrapper.querySelector(`input[name="pick-${game.gameId}"]:checked`);
       state.picks[game.gameId] = selected ? selected.value : '';
       saveLocal(state);
+
+      // Auto-save to Firestore
+      try {
+        const displayName = (el.displayName.value || '').trim();
+        const leagueId = (el.leagueId.value || '').trim() || 'demo-league';
+        if (!displayName) {
+          setStatus('Enter your name to save picks.', 'error');
+          return;
+        }
+        const ready = await firebaseReady;
+        if (!ready || !db || !collection || !serverTimestamp || !doc || !setDoc) {
+          setStatus('Firestore not configured. Paste your Firebase config.', 'error');
+          return;
+        }
+        const nameKey = normalizeName(displayName);
+        const data = {
+          league: leagueId,
+          name: displayName,
+          nameKey,
+          gameId: game.gameId,
+          teamId: state.picks[game.gameId],
+          createdAt: serverTimestamp()
+        };
+        await setDoc(doc(db, 'picks', pickDocId(leagueId, nameKey, game.gameId)), data);
+        setStatus('Saved!', 'success');
+        // Refresh picks list for this game
+        loadPicksForGame(game.gameId, wrapper);
+      } catch (e) {
+        console.error('Auto-save failed:', e);
+        setStatus('Failed to save pick. Try again.', 'error');
+      }
     });
   });
 
@@ -317,7 +347,10 @@ async function submitAllPicks() {
 
 async function render() {
   const state = loadLocal();
-  el.displayName.value = state.displayName || '';
+  // Preserve current name input; do not overwrite on refresh
+  if (!el.displayName.value) {
+    el.displayName.value = state.displayName || '';
+  }
   el.leagueId.value = state.leagueId || 'demo-league';
   if (el.weekSelect) el.weekSelect.value = state.week || '1';
 
@@ -335,7 +368,7 @@ async function render() {
     if (!db) {
       setStatus('Local mode: paste Firebase config to enable picks persistence.', 'info');
     } else {
-      setStatus('Schedule loaded. Select your picks and click Submit All Picks.', 'success');
+      setStatus('Schedule loaded. Selections are saved automatically.', 'success');
     }
   } catch (err) {
     console.error(err);
@@ -362,6 +395,46 @@ async function render() {
       saveLocal(s);
     });
   }
+}
+
+// Build a map of saved picks for a user in a league: { [gameId]: teamId }
+async function getSavedPicksMap(league, displayName) {
+  const nameKey = normalizeName(displayName);
+  if (!nameKey) return {};
+  try {
+    const ready = await firebaseReady;
+    if (!ready || !db) return {};
+    const q = query(
+      collection(db, 'picks'),
+      where('league', '==', league),
+      where('nameKey', '==', nameKey)
+    );
+    const snap = await getDocs(q);
+    const saved = {};
+    snap.forEach(dref => {
+      const x = dref.data();
+      if (x && x.gameId && x.teamId) saved[x.gameId] = x.teamId;
+    });
+    return saved;
+  } catch (e) {
+    console.warn('getSavedPicksMap failed:', e);
+    return {};
+  }
+}
+
+function clearSelectionsForUnpickedGames(savedMap) {
+  const s = loadLocal();
+  document.querySelectorAll('.game-card').forEach(card => {
+    const gameId = card.dataset.gameId;
+    if (!savedMap[gameId]) {
+      // Clear UI radios without triggering change
+      const radios = card.querySelectorAll(`input[name="pick-${gameId}"]`);
+      radios.forEach(r => { r.checked = false; });
+      // Clear local state
+      if (s.picks) s.picks[gameId] = '';
+    }
+  });
+  saveLocal(s);
 }
 
 // Event listeners
@@ -404,25 +477,16 @@ el.refreshBtn.addEventListener('click', async () => {
   await render();
   const league = (el.leagueId && el.leagueId.value) || 'demo-league';
   const displayName = (el.displayName && el.displayName.value) || '';
-  await restoreUserSelections(league, displayName);
-});
-
-el.clearLocalBtn.addEventListener('click', () => {
-  // preserve name and leagueId, only clear picks
-  try {
-    const s = loadLocal();
-    s.picks = {};
-    saveLocal(s);
-    setStatus('Cleared local selections.');
-  } catch (e) {
-    // fallback: if something weird happens, don't erase user name
-    console.error('Failed to clear picks, leaving name/league intact:', e);
-    setStatus('Failed to clear picks (check console).', 'error');
+  if (displayName) {
+    const saved = await getSavedPicksMap(league, displayName);
+    clearSelectionsForUnpickedGames(saved);
+    await restoreUserSelections(league, displayName);
   }
-  render();
 });
 
-el.submitAllBtn.addEventListener('click', submitAllPicks);
+// clear selections button removed
+
+// submit button removed (auto-save on change)
 
 // Initialize
 render();
