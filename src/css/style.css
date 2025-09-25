@@ -85,6 +85,11 @@ body{
   font-size: 15px;
 }
 
+/* Ensure select dropdown options are readable on dark theme */
+.control-group select { background-color: var(--surface); color: var(--text); }
+.control-group select option { background-color: var(--surface); color: var(--text); }
+.control-group select optgroup { background-color: var(--surface); color: var(--text); }
+
 /* winner/loser highlights */
 .winner {
   background: rgba(133, 244, 196, 0.16) !important;
