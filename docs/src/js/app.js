@@ -26,9 +26,9 @@ function setStatus(text, type = 'info') {
 function loadLocal() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : { displayName: '', leagueId: 'pookie-league', week: '1', picks: {} };
+    return raw ? JSON.parse(raw) : { displayName: '', leagueId: '', week: '4', picks: {} };
   } catch {
-    return { displayName: '', leagueId: 'pookie-league', week: '1', picks: {} };
+    return { displayName: '', leagueId: '', week: '4', picks: {} };
   }
 }
 
@@ -131,7 +131,7 @@ function normalizeEvents(events) {
 }
 
 async function fetchSchedule(week) {
-  const url = `${SCHEDULE_URL}?week=${encodeURIComponent(week || '1')}`;
+  const url = `${SCHEDULE_URL}?week=${encodeURIComponent(week || '4')}`;
   const res = await fetch(url, { cache: 'no-store' });
   if (!res.ok) throw new Error(`Schedule fetch failed: ${res.status}`);
   const data = await res.json();
@@ -352,12 +352,12 @@ async function render() {
     el.displayName.value = state.displayName || '';
   }
   el.leagueId.value = state.leagueId || 'demo-league';
-  if (el.weekSelect) el.weekSelect.value = state.week || '1';
+  if (el.weekSelect) el.weekSelect.value = state.week || '4';
 
   setStatus('Loading schedule...');
 
   try {
-    const games = await fetchSchedule(state.week || '1');
+    const games = await fetchSchedule(state.week || '4');
     el.games.innerHTML = '';
 
     games.forEach(g => {
@@ -391,7 +391,7 @@ async function render() {
   if (el.weekSelect) {
     el.weekSelect.addEventListener('change', () => {
       const s = loadLocal();
-      s.week = el.weekSelect.value || '1';
+      s.week = el.weekSelect.value || '4';
       saveLocal(s);
     });
   }
